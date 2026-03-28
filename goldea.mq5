@@ -1,74 +1,62 @@
 //+------------------------------------------------------------------+
-//|  goldea.mq5  -  Goldea EA                                        |
-//|  Modular Expert Advisor / Visual Indicator for XAUUSD            |
+//|  goldea.mq5                                                       |
 //+------------------------------------------------------------------+
 #property copyright   "Goldea"
 #property version     "1.00"
-#property description "Modular EA – attach to chart to use as visual indicator"
+#property description "Modular EA"
 
 #include "modules/FVG.mqh"
+#include "modules/IFVG.mqh"
 
-//====================================================================
-//  FVG MODULE INPUTS
-//====================================================================
-input group  "═══════════  FAIR VALUE GAP MODULE  ═══════════"
-input bool   FVG_Enable                  = true;         // FVG - Enable Module
-input int    FVG_History_CandlesBack     = 50;           // FVG - History   - Candles Back
-input color  FVG_Display_BullishColour   = clrLime;      // FVG - Display   - Bullish Colour
-input color  FVG_Display_BearishColour   = clrRed;       // FVG - Display   - Bearish Colour
-input int    FVG_Display_Opacity         = 60;           // FVG - Display   - Rectangle Opacity (0=solid, 100=invisible)
-input double FVG_Filter_MinSizePips      = 5.0;          // FVG - Filter    - Minimum Size (pips)
-input int    FVG_Range_LookbackCandles   = 10;           // FVG - Range     - Lookback Candles
-input int    FVG_Range_ATRPeriod         = 14;           // FVG - Range     - ATR Period
-input double FVG_Range_ATRMultiplier     = 1.5;          // FVG - Range     - ATR Multiplier (range tight if spread < X * ATR)
-input double FVG_Breakout_ATRMultiplier  = 1.0;          // FVG - Breakout  - ATR Multiplier (impulse body > X * ATR)
+input group  "═══  FAIR VALUE GAP  ═══"
+input bool   FVG_Enable                  = true;      // FVG - Enable Module
+input int    FVG_History_CandlesBack     = 100;        // FVG - History - Candles Back
+input color  FVG_Display_BullishColour   = clrLime;   // FVG - Display - Bullish Colour
+input color  FVG_Display_BearishColour   = clrRed;    // FVG - Display - Bearish Colour
 
-//====================================================================
-//  GLOBALS
-//====================================================================
-CFVGModule *g_fvg = NULL;
+input group  "═══  INVERTED FVG  ═══"
+input bool   IFVG_Enable                 = true;      // IFVG - Enable Module
+input color  IFVG_Display_Colour         = clrYellow; // IFVG - Display - Colour
+input int    IFVG_Display_Count          = 3;          // IFVG - Display - Show Last N
+input bool   IFVG_Invalidate_On_Break    = true;       // IFVG - Invalidate on price break
 
-//====================================================================
+CFVGModule  *g_fvg  = NULL;
+CIFVGModule *g_ifvg = NULL;
+
 int OnInit()
 {
    if(FVG_Enable)
    {
-      FVGSettings s;
-      s.history_candles  = FVG_History_CandlesBack;
-      s.bullish_colour   = FVG_Display_BullishColour;
-      s.bearish_colour   = FVG_Display_BearishColour;
-      s.opacity          = FVG_Display_Opacity;
-      s.min_size_pips    = FVG_Filter_MinSizePips;
-      s.range_lookback   = FVG_Range_LookbackCandles;
-      s.range_atr_period = FVG_Range_ATRPeriod;
-      s.range_atr_mult   = FVG_Range_ATRMultiplier;
-      s.breakout_atr_mult= FVG_Breakout_ATRMultiplier;
+      FVGSettings fs;
+      fs.history_candles = FVG_History_CandlesBack;
+      fs.bullish_colour  = FVG_Display_BullishColour;
+      fs.bearish_colour  = FVG_Display_BearishColour;
+      g_fvg = new CFVGModule(fs);
+      g_fvg.Init();
+   }
 
-      g_fvg = new CFVGModule(s);
-      if(!g_fvg.Init())
-      {
-         Print("Goldea: FVG module failed to initialise.");
-         return INIT_FAILED;
-      }
+   if(IFVG_Enable)
+   {
+      IFVGSettings is;
+      is.history_candles = FVG_History_CandlesBack;
+      is.colour          = IFVG_Display_Colour;
+      is.count           = IFVG_Display_Count;
+      is.invalidate      = IFVG_Invalidate_On_Break;
+      g_ifvg = new CIFVGModule(is);
+      g_ifvg.Init();
    }
 
    return INIT_SUCCEEDED;
 }
 
-//====================================================================
 void OnDeinit(const int reason)
 {
-   if(g_fvg != NULL)
-   {
-      g_fvg.Deinit();
-      delete g_fvg;
-      g_fvg = NULL;
-   }
+   if(g_fvg  != NULL) { g_fvg.Deinit();  delete g_fvg;  g_fvg  = NULL; }
+   if(g_ifvg != NULL) { g_ifvg.Deinit(); delete g_ifvg; g_ifvg = NULL; }
 }
 
-//====================================================================
 void OnTick()
 {
-   if(g_fvg != NULL)
-      g_fvg.Update();
+   if(g_fvg  != NULL) g_fvg.Update();
+   if(g_ifvg != NULL) g_ifvg.Update();
 }
