@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|  FVG.mqh  -  Fair Value Gap (unfilled only)                      |
+//|  FVG.mqh  -  Fair Value Gap Module                               |
 //+------------------------------------------------------------------+
 #ifndef FVG_MQH
 #define FVG_MQH
@@ -11,6 +11,7 @@ struct FVGSettings
    int    history_candles;
    color  bullish_colour;
    color  bearish_colour;
+   color  mitigated_colour;
 };
 
 //+------------------------------------------------------------------+
@@ -71,8 +72,13 @@ private:
          {
             double bot = hi[c1];
             double top = lo[c3];
-            DrawRect("B_" + IntegerToString(drawn++), tm[c1], top, bot,
-                     m_settings.bullish_colour);
+
+            bool mitigated = false;
+            for(int k = c3 - 1; k >= 0; k--)
+               if(lo[k] < top) { mitigated = true; break; }
+
+            color c = mitigated ? m_settings.mitigated_colour : m_settings.bullish_colour;
+            DrawRect("B_" + IntegerToString(drawn++), tm[c1], top, bot, c);
          }
 
          //--- Bearish FVG: gap between hi[c3] (bottom) and lo[c1] (top)
@@ -80,12 +86,16 @@ private:
          {
             double bot = hi[c3];
             double top = lo[c1];
-            DrawRect("R_" + IntegerToString(drawn++), tm[c1], top, bot,
-                     m_settings.bearish_colour);
+
+            bool mitigated = false;
+            for(int k = c3 - 1; k >= 0; k--)
+               if(hi[k] > bot) { mitigated = true; break; }
+
+            color c = mitigated ? m_settings.mitigated_colour : m_settings.bearish_colour;
+            DrawRect("R_" + IntegerToString(drawn++), tm[c1], top, bot, c);
          }
       }
 
-      PrintFormat("FVG: %d unfilled drawn", drawn);
       ChartRedraw(0);
    }
 
