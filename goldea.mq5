@@ -19,6 +19,7 @@ input group  "═══  ATR STOP LOSS  ═══"
 input bool   ATR_Enable                  = true;      // ATR - Enable Module
 input int    ATR_Period                  = 14;        // ATR - Period
 input double ATR_Multiplier              = 1.5;       // ATR - Multiplier
+input int    ATR_LookbackBars            = 100;       // ATR - Bars to Display
 input color  ATR_LongColour              = clrAqua;   // ATR - Long Stop Colour
 input color  ATR_ShortColour             = clrOrange; // ATR - Short Stop Colour
 
@@ -43,6 +44,7 @@ int OnInit()
       ATRStopSettings as;
       as.atr_period     = ATR_Period;
       as.atr_multiplier = ATR_Multiplier;
+      as.lookback_bars  = ATR_LookbackBars;
       as.long_colour    = ATR_LongColour;
       as.short_colour   = ATR_ShortColour;
       g_atr = new CATRStopModule(as);
