@@ -77,7 +77,7 @@ private:
 
             bool mitigated = false;
             for(int k = c3 - 1; k >= 0; k--)
-               if(cl[k] < top) { mitigated = true; break; }
+               if(cl[k] < bot) { mitigated = true; break; }
 
             color c = mitigated ? m_settings.mitigated_colour : m_settings.bullish_colour;
             DrawRect("B_" + IntegerToString(drawn++), tm[c1], top, bot, c);
@@ -91,7 +91,7 @@ private:
 
             bool mitigated = false;
             for(int k = c3 - 1; k >= 0; k--)
-               if(cl[k] > bot) { mitigated = true; break; }
+               if(cl[k] > top) { mitigated = true; break; }
 
             color c = mitigated ? m_settings.mitigated_colour : m_settings.bearish_colour;
             DrawRect("R_" + IntegerToString(drawn++), tm[c1], top, bot, c);
