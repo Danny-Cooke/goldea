@@ -6,6 +6,7 @@
 #property description "Modular EA"
 
 #include "modules/FVG.mqh"
+#include "modules/ATRStop.mqh"
 
 input group  "═══  FAIR VALUE GAP  ═══"
 input bool   FVG_Enable                  = true;      // FVG - Enable Module
@@ -14,7 +15,15 @@ input color  FVG_Display_BullishColour   = clrLime;   // FVG - Bullish FVG Colou
 input color  FVG_Display_BearishColour   = clrRed;    // FVG - Bearish FVG Colour
 input color  FVG_Display_MitigatedColour = clrYellow; // FVG - Mitigated FVG Colour
 
-CFVGModule *g_fvg = NULL;
+input group  "═══  ATR STOP LOSS  ═══"
+input bool   ATR_Enable                  = true;      // ATR - Enable Module
+input int    ATR_Period                  = 14;        // ATR - Period
+input double ATR_Multiplier              = 1.5;       // ATR - Multiplier
+input color  ATR_LongColour              = clrAqua;   // ATR - Long Stop Colour
+input color  ATR_ShortColour             = clrOrange; // ATR - Short Stop Colour
+
+CFVGModule    *g_fvg  = NULL;
+CATRStopModule *g_atr = NULL;
 
 int OnInit()
 {
@@ -29,15 +38,28 @@ int OnInit()
       g_fvg.Init();
    }
 
+   if(ATR_Enable)
+   {
+      ATRStopSettings as;
+      as.atr_period     = ATR_Period;
+      as.atr_multiplier = ATR_Multiplier;
+      as.long_colour    = ATR_LongColour;
+      as.short_colour   = ATR_ShortColour;
+      g_atr = new CATRStopModule(as);
+      if(!g_atr.Init()) { delete g_atr; g_atr = NULL; }
+   }
+
    return INIT_SUCCEEDED;
 }
 
 void OnDeinit(const int reason)
 {
    if(g_fvg != NULL) { g_fvg.Deinit(); delete g_fvg; g_fvg = NULL; }
+   if(g_atr != NULL) { g_atr.Deinit(); delete g_atr; g_atr = NULL; }
 }
 
 void OnTick()
 {
    if(g_fvg != NULL) g_fvg.Update();
+   if(g_atr != NULL) g_atr.Update();
 }
