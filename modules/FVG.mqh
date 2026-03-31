@@ -49,15 +49,17 @@ private:
    {
       int bars = m_settings.history_candles + 5;
 
-      double   hi[], lo[];
+      double   hi[], lo[], cl[];
       datetime tm[];
       ArraySetAsSeries(hi, true);
       ArraySetAsSeries(lo, true);
+      ArraySetAsSeries(cl, true);
       ArraySetAsSeries(tm, true);
 
-      if(CopyHigh(m_symbol, PERIOD_CURRENT, 0, bars, hi) < bars) return;
-      if(CopyLow (m_symbol, PERIOD_CURRENT, 0, bars, lo) < bars) return;
-      if(CopyTime(m_symbol, PERIOD_CURRENT, 0, bars, tm) < bars) return;
+      if(CopyHigh (m_symbol, PERIOD_CURRENT, 0, bars, hi) < bars) return;
+      if(CopyLow  (m_symbol, PERIOD_CURRENT, 0, bars, lo) < bars) return;
+      if(CopyClose(m_symbol, PERIOD_CURRENT, 0, bars, cl) < bars) return;
+      if(CopyTime (m_symbol, PERIOD_CURRENT, 0, bars, tm) < bars) return;
 
       int drawn = 0;
 
@@ -75,7 +77,7 @@ private:
 
             bool mitigated = false;
             for(int k = c3 - 1; k >= 0; k--)
-               if(lo[k] < top) { mitigated = true; break; }
+               if(cl[k] < top) { mitigated = true; break; }
 
             color c = mitigated ? m_settings.mitigated_colour : m_settings.bullish_colour;
             DrawRect("B_" + IntegerToString(drawn++), tm[c1], top, bot, c);
@@ -89,7 +91,7 @@ private:
 
             bool mitigated = false;
             for(int k = c3 - 1; k >= 0; k--)
-               if(hi[k] > bot) { mitigated = true; break; }
+               if(cl[k] > bot) { mitigated = true; break; }
 
             color c = mitigated ? m_settings.mitigated_colour : m_settings.bearish_colour;
             DrawRect("R_" + IntegerToString(drawn++), tm[c1], top, bot, c);
