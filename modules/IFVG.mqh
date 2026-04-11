@@ -10,8 +10,13 @@ struct IFVGSettings
 {
    int    history_candles;
    color  colour;
-   int    count;        // display last N by fill time
-   bool   invalidate;   // remove IFVG if price breaks back through
+   int    count;            // draw last N zones by fill time
+   bool   invalidate;       // remove if price breaks back through
+   double tp_multiplier;    // TP = risk * this value  (e.g. 1.5 or 3.0)
+   int    sl_lookback;      // bars back to search for swing hi/lo for SL
+   double sl_buffer_pts;    // extra buffer on SL in points (e.g. 50)
+   color  long_colour;      // line colour for long setups
+   color  short_colour;     // line colour for short setups
 };
 
 struct IFVGZone
@@ -19,7 +24,8 @@ struct IFVGZone
    datetime time_start;
    double   top;
    double   bottom;
-   bool     is_bullish;   // true = originally bullish FVG (now bearish zone)
+   bool     is_bullish;   // true = was bullish FVG  → short setup
+                          // false = was bearish FVG → long  setup
    datetime fill_time;
 };
 
@@ -71,25 +77,20 @@ private:
       if(CopyTime (m_symbol, PERIOD_CURRENT, 0, bars, tm) < bars) return;
 
       IFVGZone ifvgs[];
-      int bull_found=0, bull_filled=0, bull_broken=0;
-      int bear_found=0, bear_filled=0, bear_broken=0;
 
       for(int c3 = 1; c3 <= m_settings.history_candles - 2; c3++)
       {
-         int c2 = c3 + 1;
          int c1 = c3 + 2;
          if(c1 >= bars) break;
 
          //----------------------------------------------------------
-         // BULLISH FVG → IFVG (becomes bearish zone after full fill)
-         // Condition : hi[c1] < lo[c3]
-         // Gap       : bottom = hi[c1], top = lo[c3]
-         // Full fill : lo[k] < bottom  (price drove below gap bottom)
-         // Broken    : after fill, close[k] > top (candle closes above zone top)
+         // BULLISH FVG (hi[c1] < lo[c3])  →  SHORT setup after fill
+         // Gap   : bottom = hi[c1], top = lo[c3]
+         // Fill  : lo[k] < bottom  (wick passed through gap bottom)
+         // Broken: close[k] > top  (closed above zone = invalidated)
          //----------------------------------------------------------
          if(hi[c1] < lo[c3])
          {
-            bull_found++;
             double bot = hi[c1];
             double top = lo[c3];
 
@@ -99,7 +100,6 @@ private:
 
             if(fill_idx >= 0)
             {
-               bull_filled++;
                bool broken = false;
                if(m_settings.invalidate)
                   for(int k = fill_idx - 1; k >= 0; k--)
@@ -107,21 +107,17 @@ private:
 
                if(!broken)
                   AddZone(ifvgs, tm[c1], top, bot, true, tm[fill_idx]);
-               else
-                  bull_broken++;
             }
          }
 
          //----------------------------------------------------------
-         // BEARISH FVG → IFVG (becomes bullish zone after full fill)
-         // Condition : lo[c1] > hi[c3]
-         // Gap       : bottom = hi[c3], top = lo[c1]
-         // Full fill : hi[k] > top  (price drove above gap top)
-         // Broken    : after fill, close[k] < bottom (candle closes below zone bottom)
+         // BEARISH FVG (lo[c1] > hi[c3])  →  LONG setup after fill
+         // Gap   : bottom = hi[c3], top = lo[c1]
+         // Fill  : hi[k] > top  (wick passed through gap top)
+         // Broken: close[k] < bottom (closed below zone = invalidated)
          //----------------------------------------------------------
          if(lo[c1] > hi[c3])
          {
-            bear_found++;
             double bot = hi[c3];
             double top = lo[c1];
 
@@ -131,7 +127,6 @@ private:
 
             if(fill_idx >= 0)
             {
-               bear_filled++;
                bool broken = false;
                if(m_settings.invalidate)
                   for(int k = fill_idx - 1; k >= 0; k--)
@@ -139,36 +134,74 @@ private:
 
                if(!broken)
                   AddZone(ifvgs, tm[c1], top, bot, false, tm[fill_idx]);
-               else
-                  bear_broken++;
             }
          }
       }
 
-      // Sort newest fill first, draw last N
+      // Sort newest fill first
       SortDesc(ifvgs);
+
+      // Draw the IFVG zone rectangles
       int draw_n = MathMin(ArraySize(ifvgs), m_settings.count);
       for(int i = 0; i < draw_n; i++)
-      {
          DrawRect("Z_" + IntegerToString(i),
                   ifvgs[i].time_start, ifvgs[i].top, ifvgs[i].bottom);
-      }
 
-      // Debug output
-      PrintFormat("IFVG Scan | BULL FVGs: found=%d filled=%d broken=%d | BEAR FVGs: found=%d filled=%d broken=%d | IFVGs total=%d showing=%d",
-                  bull_found, bull_filled, bull_broken,
-                  bear_found, bear_filled, bear_broken,
-                  ArraySize(ifvgs), draw_n);
-      for(int i = 0; i < draw_n; i++)
-         PrintFormat("  IFVG[%d] %s | top=%.5f bot=%.5f | filled=%s",
-                     i,
-                     ifvgs[i].is_bullish ? "BULL->BEAR" : "BEAR->BULL",
-                     ifvgs[i].top, ifvgs[i].bottom,
-                     TimeToString(ifvgs[i].fill_time));
+      // Draw trade setup lines for the most recent IFVG
+      if(ArraySize(ifvgs) > 0)
+         DrawSetup(ifvgs[0], hi, lo, bars);
 
       ChartRedraw(0);
    }
 
+   //--- Build trade levels from the most-recently-mitigated IFVG ----
+   void DrawSetup(IFVGZone &z, double &hi[], double &lo[], int bars)
+   {
+      double entry = (z.top + z.bottom) / 2.0;
+      double buf   = m_settings.sl_buffer_pts * _Point;
+
+      // Scan sl_lookback bars from current bar for the swing extreme
+      int lb = MathMin(m_settings.sl_lookback, bars - 1);
+      double swing_lo = lo[0];
+      double swing_hi = hi[0];
+      for(int k = 1; k <= lb; k++)
+      {
+         if(lo[k] < swing_lo) swing_lo = lo[k];
+         if(hi[k] > swing_hi) swing_hi = hi[k];
+      }
+
+      double sl, tp, risk;
+      string dir_tag;
+      color  line_col;
+
+      if(!z.is_bullish)   // bearish FVG mitigated → LONG
+      {
+         sl       = swing_lo - buf;
+         risk     = entry - sl;
+         tp       = entry + risk * m_settings.tp_multiplier;
+         dir_tag  = "LONG";
+         line_col = m_settings.long_colour;
+      }
+      else                // bullish FVG mitigated → SHORT
+      {
+         sl       = swing_hi + buf;
+         risk     = sl - entry;
+         tp       = entry - risk * m_settings.tp_multiplier;
+         dir_tag  = "SHORT";
+         line_col = m_settings.short_colour;
+      }
+
+      DrawHLine("ENTRY", entry, line_col,  STYLE_SOLID,
+                dir_tag + "  Entry @ " + DoubleToString(entry, _Digits));
+      DrawHLine("SL",    sl,    clrRed,    STYLE_DASHDOT,
+                dir_tag + "  SL    @ " + DoubleToString(sl,    _Digits)
+                + "  (risk=" + DoubleToString(risk / _Point, 0) + " pts)");
+      DrawHLine("TP",    tp,    clrLime,   STYLE_DASH,
+                dir_tag + "  TP    @ " + DoubleToString(tp,    _Digits)
+                + "  (" + DoubleToString(m_settings.tp_multiplier, 1) + "R)");
+   }
+
+   //--- Helpers -------------------------------------------------------
    void AddZone(IFVGZone &arr[], datetime t_start, double top, double bot,
                 bool bullish, datetime fill_time)
    {
@@ -196,11 +229,23 @@ private:
    {
       string   name  = IFVG_OBJ_PREFIX + id;
       datetime right = TimeCurrent() + (datetime)(PeriodSeconds(PERIOD_CURRENT) * 10);
-
       ObjectCreate(0, name, OBJ_RECTANGLE, 0, t_start, top, right, bot);
       ObjectSetInteger(0, name, OBJPROP_COLOR,      m_settings.colour);
       ObjectSetInteger(0, name, OBJPROP_FILL,       true);
       ObjectSetInteger(0, name, OBJPROP_BACK,       false);
+      ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+      ObjectSetInteger(0, name, OBJPROP_HIDDEN,     true);
+   }
+
+   void DrawHLine(string id, double price, color c, ENUM_LINE_STYLE style, string label)
+   {
+      string name = IFVG_OBJ_PREFIX + "HL_" + id;
+      ObjectCreate(0, name, OBJ_HLINE, 0, 0, price);
+      ObjectSetInteger(0, name, OBJPROP_COLOR,      c);
+      ObjectSetInteger(0, name, OBJPROP_WIDTH,      2);
+      ObjectSetInteger(0, name, OBJPROP_STYLE,      style);
+      ObjectSetString (0, name, OBJPROP_TOOLTIP,    label);
+      ObjectSetString (0, name, OBJPROP_TEXT,       label);
       ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
       ObjectSetInteger(0, name, OBJPROP_HIDDEN,     true);
    }
