@@ -4,6 +4,8 @@
 #ifndef IFVG_MQH
 #define IFVG_MQH
 
+#include <Trade/Trade.mqh>
+
 #define IFVG_OBJ_PREFIX "IFVG_"
 
 struct IFVGSettings
@@ -17,6 +19,9 @@ struct IFVGSettings
    double sl_buffer_pts;    // extra buffer on SL in points (e.g. 50)
    color  long_colour;      // line colour for long setups
    color  short_colour;     // line colour for short setups
+   // Trading
+   double lot_size;
+   int    magic;
 };
 
 struct IFVGZone
@@ -35,16 +40,35 @@ class CIFVGModule
 private:
    IFVGSettings m_settings;
    string       m_symbol;
+   CTrade       m_trade;
+
+   // Active setup tracking
+   datetime     m_setup_fill;     // fill_time of setup we last placed an order for
+   bool         m_setup_long;     // direction of that setup
+   ulong        m_pending_ticket;
 
 public:
    CIFVGModule(IFVGSettings &s)
    {
-      m_settings = s;
-      m_symbol   = Symbol();
+      m_settings       = s;
+      m_symbol         = Symbol();
+      m_setup_fill     = 0;
+      m_setup_long     = false;
+      m_pending_ticket = 0;
    }
 
-   bool Init()   { Scan(); return true; }
-   void Deinit() { ObjectsDeleteAll(0, IFVG_OBJ_PREFIX); }
+   bool Init()
+   {
+      m_trade.SetExpertMagicNumber(m_settings.magic);
+      Scan();
+      return true;
+   }
+
+   void Deinit()
+   {
+      CancelPending();
+      ObjectsDeleteAll(0, IFVG_OBJ_PREFIX);
+   }
 
    void Update()
    {
@@ -138,20 +162,22 @@ private:
          }
       }
 
-      // Sort newest fill first
       SortDesc(ifvgs);
 
-      int total = ArraySize(ifvgs);
+      int total  = ArraySize(ifvgs);
       int draw_n = MathMin(total, m_settings.count);
 
-      // Draw the IFVG zone rectangles
       for(int i = 0; i < draw_n; i++)
          DrawRect("Z_" + IntegerToString(i),
                   ifvgs[i].time_start, ifvgs[i].top, ifvgs[i].bottom);
 
-      // Draw trade setup lines for the most recent IFVG
       if(total > 0)
+      {
          DrawSetup(ifvgs[0], hi, lo, bars);
+         ManageTrade(ifvgs[0], hi, lo, bars);
+      }
+      else
+         CancelPending();
 
       PrintFormat("IFVG | found=%d  showing=%d  invalidate=%s  tp_mult=%.1f",
                   total, draw_n,
@@ -166,14 +192,14 @@ private:
       ChartRedraw(0);
    }
 
-   //--- Build trade levels from the most-recently-mitigated IFVG ----
-   void DrawSetup(IFVGZone &z, double &hi[], double &lo[], int bars)
+   //--- Shared level computation (used by draw AND trade logic) ------
+   void ComputeLevels(IFVGZone &z, double &hi[], double &lo[], int bars,
+                      bool &is_long, double &entry, double &sl, double &tp)
    {
-      double entry = (z.top + z.bottom) / 2.0;
+      entry        = (z.top + z.bottom) / 2.0;
       double buf   = m_settings.sl_buffer_pts * _Point;
+      int lb       = MathMin(m_settings.sl_lookback, bars - 1);
 
-      // Scan sl_lookback bars from current bar for the swing extreme
-      int lb = MathMin(m_settings.sl_lookback, bars - 1);
       double swing_lo = lo[0];
       double swing_hi = hi[0];
       for(int k = 1; k <= lb; k++)
@@ -182,35 +208,110 @@ private:
          if(hi[k] > swing_hi) swing_hi = hi[k];
       }
 
-      double sl, tp, risk;
-      string dir_tag;
-      color  line_col;
-
-      if(!z.is_bullish)   // bearish FVG mitigated → LONG
+      is_long = !z.is_bullish;
+      if(is_long)
       {
-         sl       = swing_lo - buf;
-         risk     = entry - sl;
-         tp       = entry + risk * m_settings.tp_multiplier;
-         dir_tag  = "LONG";
-         line_col = m_settings.long_colour;
+         sl = swing_lo - buf;
+         tp = entry + (entry - sl) * m_settings.tp_multiplier;
       }
-      else                // bullish FVG mitigated → SHORT
+      else
       {
-         sl       = swing_hi + buf;
-         risk     = sl - entry;
-         tp       = entry - risk * m_settings.tp_multiplier;
-         dir_tag  = "SHORT";
-         line_col = m_settings.short_colour;
+         sl = swing_hi + buf;
+         tp = entry - (sl - entry) * m_settings.tp_multiplier;
       }
+   }
 
-      DrawHLine("ENTRY", entry, line_col,  STYLE_SOLID,
+   //--- Draw trade setup lines ---------------------------------------
+   void DrawSetup(IFVGZone &z, double &hi[], double &lo[], int bars)
+   {
+      bool is_long; double entry, sl, tp;
+      ComputeLevels(z, hi, lo, bars, is_long, entry, sl, tp);
+
+      string dir_tag  = is_long ? "LONG" : "SHORT";
+      color  line_col = is_long ? m_settings.long_colour : m_settings.short_colour;
+      double risk     = is_long ? entry - sl : sl - entry;
+
+      DrawHLine("ENTRY", entry, line_col, STYLE_SOLID,
                 dir_tag + "  Entry @ " + DoubleToString(entry, _Digits));
-      DrawHLine("SL",    sl,    clrRed,    STYLE_DASHDOT,
-                dir_tag + "  SL    @ " + DoubleToString(sl,    _Digits)
+      DrawHLine("SL", sl, clrRed, STYLE_DASHDOT,
+                dir_tag + "  SL    @ " + DoubleToString(sl, _Digits)
                 + "  (risk=" + DoubleToString(risk / _Point, 0) + " pts)");
-      DrawHLine("TP",    tp,    clrLime,   STYLE_DASH,
-                dir_tag + "  TP    @ " + DoubleToString(tp,    _Digits)
+      DrawHLine("TP", tp, clrLime, STYLE_DASH,
+                dir_tag + "  TP    @ " + DoubleToString(tp, _Digits)
                 + "  (" + DoubleToString(m_settings.tp_multiplier, 1) + "R)");
+   }
+
+   //--- Trade management ---------------------------------------------
+   void ManageTrade(IFVGZone &z, double &hi[], double &lo[], int bars)
+   {
+      bool is_long; double entry, sl, tp;
+      ComputeLevels(z, hi, lo, bars, is_long, entry, sl, tp);
+
+      // Only act when the setup changes (new fill time or direction flip)
+      bool setup_changed = (z.fill_time != m_setup_fill || is_long != m_setup_long);
+      if(!setup_changed) return;
+
+      CancelPending();
+
+      if(!HasOpenPosition())
+         PlaceLimitOrder(is_long, entry, sl, tp);
+
+      // Record the setup we just acted on regardless of whether order was placed,
+      // so we don't keep retrying on the same bar loop
+      m_setup_fill = z.fill_time;
+      m_setup_long = is_long;
+   }
+
+   bool HasOpenPosition()
+   {
+      for(int i = 0; i < PositionsTotal(); i++)
+      {
+         ulong ticket = PositionGetTicket(i);
+         if(ticket > 0
+            && PositionGetInteger(POSITION_MAGIC) == (long)m_settings.magic
+            && PositionGetString(POSITION_SYMBOL) == m_symbol)
+            return true;
+      }
+      return false;
+   }
+
+   void CancelPending()
+   {
+      if(m_pending_ticket == 0) return;
+      // OrderSelect only returns true for still-pending orders;
+      // if the order was filled it is now a position and we just clear the ticket.
+      if(OrderSelect(m_pending_ticket))
+         m_trade.OrderDelete(m_pending_ticket);
+      m_pending_ticket = 0;
+   }
+
+   void PlaceLimitOrder(bool is_long, double entry, double sl, double tp)
+   {
+      double price = NormalizeDouble(entry, _Digits);
+      sl           = NormalizeDouble(sl,    _Digits);
+      tp           = NormalizeDouble(tp,    _Digits);
+
+      bool placed = false;
+      if(is_long)
+      {
+         // BuyLimit requires entry < current Ask
+         double ask = SymbolInfoDouble(m_symbol, SYMBOL_ASK);
+         if(price < ask)
+            placed = m_trade.BuyLimit(m_settings.lot_size, price, m_symbol, sl, tp);
+      }
+      else
+      {
+         // SellLimit requires entry > current Bid
+         double bid = SymbolInfoDouble(m_symbol, SYMBOL_BID);
+         if(price > bid)
+            placed = m_trade.SellLimit(m_settings.lot_size, price, m_symbol, sl, tp);
+      }
+
+      if(placed)
+         m_pending_ticket = m_trade.ResultOrder();
+      else
+         PrintFormat("IFVG | PlaceLimitOrder skipped – entry=%.5f not valid for %s",
+                     price, is_long ? "BuyLimit" : "SellLimit");
    }
 
    //--- Helpers -------------------------------------------------------
