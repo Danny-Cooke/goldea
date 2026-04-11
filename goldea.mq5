@@ -21,7 +21,7 @@ input bool   IFVG_Enable                = true;        // IFVG - Enable Module
 input int    IFVG_History_CandlesBack   = 100;         // IFVG - History - Candles Back
 input color  IFVG_Zone_Colour           = clrMagenta;  // IFVG - Zone Colour
 input int    IFVG_Zone_Count            = 3;           // IFVG - Zones to Display
-input bool   IFVG_Invalidate            = true;        // IFVG - Remove Broken Zones
+input bool   IFVG_Invalidate            = false;       // IFVG - Remove Broken Zones
 input double IFVG_TP_Multiplier         = 2.0;         // IFVG - TP Risk Multiplier (e.g. 2 = 2R)
 input int    IFVG_SL_LookbackBars       = 20;          // IFVG - SL Swing Lookback (bars)
 input double IFVG_SL_BufferPoints       = 50.0;        // IFVG - SL Buffer (points)

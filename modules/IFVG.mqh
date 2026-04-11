@@ -141,15 +141,27 @@ private:
       // Sort newest fill first
       SortDesc(ifvgs);
 
+      int total = ArraySize(ifvgs);
+      int draw_n = MathMin(total, m_settings.count);
+
       // Draw the IFVG zone rectangles
-      int draw_n = MathMin(ArraySize(ifvgs), m_settings.count);
       for(int i = 0; i < draw_n; i++)
          DrawRect("Z_" + IntegerToString(i),
                   ifvgs[i].time_start, ifvgs[i].top, ifvgs[i].bottom);
 
       // Draw trade setup lines for the most recent IFVG
-      if(ArraySize(ifvgs) > 0)
+      if(total > 0)
          DrawSetup(ifvgs[0], hi, lo, bars);
+
+      PrintFormat("IFVG | found=%d  showing=%d  invalidate=%s  tp_mult=%.1f",
+                  total, draw_n,
+                  m_settings.invalidate ? "ON" : "OFF",
+                  m_settings.tp_multiplier);
+      if(total > 0)
+         PrintFormat("IFVG | latest=%s  top=%.5f  bot=%.5f  fill=%s",
+                     ifvgs[0].is_bullish ? "SHORT-setup" : "LONG-setup",
+                     ifvgs[0].top, ifvgs[0].bottom,
+                     TimeToString(ifvgs[0].fill_time));
 
       ChartRedraw(0);
    }
