@@ -27,8 +27,11 @@ input int    IFVG_SL_LookbackBars       = 20;          // IFVG - SL Swing Lookba
 input double IFVG_SL_BufferPoints       = 50.0;        // IFVG - SL Buffer (points)
 input color  IFVG_Long_Colour           = clrDodgerBlue; // IFVG - Long Setup Colour
 input color  IFVG_Short_Colour          = clrOrangeRed;  // IFVG - Short Setup Colour
-input double IFVG_LotSize               = 0.01;          // IFVG - Lot Size
-input int    IFVG_Magic                 = 42001;         // IFVG - Magic Number
+input double              IFVG_LotSize               = 0.01;          // IFVG - Lot Size
+input int                 IFVG_Magic                 = 42001;         // IFVG - Magic Number
+input ENUM_IFVG_SL_MODE   IFVG_SL_Mode               = IFVG_SL_ATR;  // IFVG - SL Mode
+input int                 IFVG_ATR_Period             = 14;            // IFVG - ATR Period (ATR mode)
+input double              IFVG_ATR_Multiplier         = 1.5;           // IFVG - ATR Multiplier (ATR mode)
 
 input group  "═══  ATR STOP LOSS  ═══"
 input bool   ATR_Enable                  = true;      // ATR - Enable Module
@@ -81,6 +84,9 @@ int OnInit()
       is.short_colour    = IFVG_Short_Colour;
       is.lot_size        = IFVG_LotSize;
       is.magic           = IFVG_Magic;
+      is.sl_mode         = IFVG_SL_Mode;
+      is.atr_period      = IFVG_ATR_Period;
+      is.atr_multiplier  = IFVG_ATR_Multiplier;
       g_ifvg = new CIFVGModule(is);
       g_ifvg.Init();
    }

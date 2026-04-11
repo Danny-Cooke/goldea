@@ -8,20 +8,30 @@
 
 #define IFVG_OBJ_PREFIX "IFVG_"
 
+enum ENUM_IFVG_SL_MODE
+{
+   IFVG_SL_SWING = 0,  // Swing high/low + buffer
+   IFVG_SL_ATR   = 1   // ATR Stop (lo - ATR*mult / hi + ATR*mult)
+};
+
 struct IFVGSettings
 {
    int    history_candles;
    color  colour;
    int    count;            // draw last N zones by fill time
    bool   invalidate;       // remove if price breaks back through
-   double tp_multiplier;    // TP = risk * this value  (e.g. 1.5 or 3.0)
-   int    sl_lookback;      // bars back to search for swing hi/lo for SL
-   double sl_buffer_pts;    // extra buffer on SL in points (e.g. 50)
-   color  long_colour;      // line colour for long setups
-   color  short_colour;     // line colour for short setups
+   double tp_multiplier;    // TP = swing-distance * this value  (e.g. 2.0)
+   int    sl_lookback;      // bars back to search for swing hi/lo
+   double sl_buffer_pts;    // extra buffer on SL in points (SWING mode only)
+   color  long_colour;
+   color  short_colour;
    // Trading
-   double lot_size;
-   int    magic;
+   double              lot_size;
+   int                 magic;
+   // SL mode
+   ENUM_IFVG_SL_MODE   sl_mode;
+   int                 atr_period;       // used when sl_mode = IFVG_SL_ATR
+   double              atr_multiplier;   // used when sl_mode = IFVG_SL_ATR
 };
 
 struct IFVGZone
@@ -41,10 +51,11 @@ private:
    IFVGSettings m_settings;
    string       m_symbol;
    CTrade       m_trade;
+   int          m_atr_handle;
 
    // Active setup tracking
-   datetime     m_setup_fill;     // fill_time of setup we last placed an order for
-   bool         m_setup_long;     // direction of that setup
+   datetime     m_setup_fill;
+   bool         m_setup_long;
    ulong        m_pending_ticket;
 
 public:
@@ -52,6 +63,7 @@ public:
    {
       m_settings       = s;
       m_symbol         = Symbol();
+      m_atr_handle     = INVALID_HANDLE;
       m_setup_fill     = 0;
       m_setup_long     = false;
       m_pending_ticket = 0;
@@ -60,6 +72,17 @@ public:
    bool Init()
    {
       m_trade.SetExpertMagicNumber(m_settings.magic);
+
+      if(m_settings.sl_mode == IFVG_SL_ATR)
+      {
+         m_atr_handle = iATR(m_symbol, PERIOD_CURRENT, m_settings.atr_period);
+         if(m_atr_handle == INVALID_HANDLE)
+         {
+            Print("IFVG: failed to create ATR handle");
+            return false;
+         }
+      }
+
       Scan();
       return true;
    }
@@ -68,6 +91,11 @@ public:
    {
       CancelPending();
       ObjectsDeleteAll(0, IFVG_OBJ_PREFIX);
+      if(m_atr_handle != INVALID_HANDLE)
+      {
+         IndicatorRelease(m_atr_handle);
+         m_atr_handle = INVALID_HANDLE;
+      }
    }
 
    void Update()
@@ -109,9 +137,6 @@ private:
 
          //----------------------------------------------------------
          // BULLISH FVG (hi[c1] < lo[c3])  →  SHORT setup after fill
-         // Gap   : bottom = hi[c1], top = lo[c3]
-         // Fill  : lo[k] < bottom  (wick passed through gap bottom)
-         // Broken: close[k] > top  (closed above zone = invalidated)
          //----------------------------------------------------------
          if(hi[c1] < lo[c3])
          {
@@ -136,9 +161,6 @@ private:
 
          //----------------------------------------------------------
          // BEARISH FVG (lo[c1] > hi[c3])  →  LONG setup after fill
-         // Gap   : bottom = hi[c3], top = lo[c1]
-         // Fill  : hi[k] > top  (wick passed through gap top)
-         // Broken: close[k] < bottom (closed below zone = invalidated)
          //----------------------------------------------------------
          if(lo[c1] > hi[c3])
          {
@@ -179,10 +201,11 @@ private:
       else
          CancelPending();
 
-      PrintFormat("IFVG | found=%d  showing=%d  invalidate=%s  tp_mult=%.1f",
+      PrintFormat("IFVG | found=%d  showing=%d  invalidate=%s  tp_mult=%.1f  sl=%s",
                   total, draw_n,
                   m_settings.invalidate ? "ON" : "OFF",
-                  m_settings.tp_multiplier);
+                  m_settings.tp_multiplier,
+                  m_settings.sl_mode == IFVG_SL_ATR ? "ATR" : "SWING");
       if(total > 0)
          PrintFormat("IFVG | latest=%s  top=%.5f  bot=%.5f  fill=%s",
                      ifvgs[0].is_bullish ? "SHORT-setup" : "LONG-setup",
@@ -192,14 +215,23 @@ private:
       ChartRedraw(0);
    }
 
-   //--- Shared level computation (used by draw AND trade logic) ------
+   //--- Shared level computation (draw + trade) ----------------------
+   //
+   //  SL source depends on sl_mode:
+   //    SWING → recent swing low/high ± buffer  (unchanged)
+   //    ATR   → lo[0] - ATR*mult  (long)
+   //             hi[0] + ATR*mult  (short)
+   //
+   //  TP is always:  entry ± swing_distance × tp_multiplier
+   //  (swing_distance = entry − swing_lo  /  swing_hi − entry)
+   //------------------------------------------------------------------
    void ComputeLevels(IFVGZone &z, double &hi[], double &lo[], int bars,
                       bool &is_long, double &entry, double &sl, double &tp)
    {
-      entry        = (z.top + z.bottom) / 2.0;
-      double buf   = m_settings.sl_buffer_pts * _Point;
-      int lb       = MathMin(m_settings.sl_lookback, bars - 1);
+      entry      = (z.top + z.bottom) / 2.0;
+      is_long    = !z.is_bullish;
 
+      int lb = MathMin(m_settings.sl_lookback, bars - 1);
       double swing_lo = lo[0];
       double swing_hi = hi[0];
       for(int k = 1; k <= lb; k++)
@@ -208,17 +240,37 @@ private:
          if(hi[k] > swing_hi) swing_hi = hi[k];
       }
 
-      is_long = !z.is_bullish;
-      if(is_long)
+      // --- SL ---
+      if(m_settings.sl_mode == IFVG_SL_ATR)
       {
-         sl = swing_lo - buf;
-         tp = entry + (entry - sl) * m_settings.tp_multiplier;
+         double atr_val = GetATR(0);
+         if(atr_val <= 0) atr_val = 0;  // fallback: SL at entry (will be skipped by trade logic)
+         if(is_long)
+            sl = lo[0] - atr_val * m_settings.atr_multiplier;
+         else
+            sl = hi[0] + atr_val * m_settings.atr_multiplier;
       }
-      else
+      else  // SWING
       {
-         sl = swing_hi + buf;
-         tp = entry - (sl - entry) * m_settings.tp_multiplier;
+         double buf = m_settings.sl_buffer_pts * _Point;
+         sl = is_long ? swing_lo - buf : swing_hi + buf;
       }
+
+      // --- TP: always based on swing distance from entry ---
+      double swing_dist = is_long ? (entry - swing_lo) : (swing_hi - entry);
+      if(swing_dist <= 0) swing_dist = MathAbs(entry - sl);  // fallback
+      tp = is_long ? entry + swing_dist * m_settings.tp_multiplier
+                   : entry - swing_dist * m_settings.tp_multiplier;
+   }
+
+   double GetATR(int shift)
+   {
+      if(m_atr_handle == INVALID_HANDLE) return 0;
+      double buf[];
+      ArraySetAsSeries(buf, true);
+      if(CopyBuffer(m_atr_handle, 0, shift, 1, buf) == 1)
+         return buf[0];
+      return 0;
    }
 
    //--- Draw trade setup lines ---------------------------------------
@@ -229,7 +281,7 @@ private:
 
       string dir_tag  = is_long ? "LONG" : "SHORT";
       color  line_col = is_long ? m_settings.long_colour : m_settings.short_colour;
-      double risk     = is_long ? entry - sl : sl - entry;
+      double risk     = MathAbs(entry - sl);
 
       DrawHLine("ENTRY", entry, line_col, STYLE_SOLID,
                 dir_tag + "  Entry @ " + DoubleToString(entry, _Digits));
@@ -247,7 +299,6 @@ private:
       bool is_long; double entry, sl, tp;
       ComputeLevels(z, hi, lo, bars, is_long, entry, sl, tp);
 
-      // Only act when the setup changes (new fill time or direction flip)
       bool setup_changed = (z.fill_time != m_setup_fill || is_long != m_setup_long);
       if(!setup_changed) return;
 
@@ -256,8 +307,6 @@ private:
       if(!HasOpenPosition())
          PlaceLimitOrder(is_long, entry, sl, tp);
 
-      // Record the setup we just acted on regardless of whether order was placed,
-      // so we don't keep retrying on the same bar loop
       m_setup_fill = z.fill_time;
       m_setup_long = is_long;
    }
@@ -278,8 +327,6 @@ private:
    void CancelPending()
    {
       if(m_pending_ticket == 0) return;
-      // OrderSelect only returns true for still-pending orders;
-      // if the order was filled it is now a position and we just clear the ticket.
       if(OrderSelect(m_pending_ticket))
          m_trade.OrderDelete(m_pending_ticket);
       m_pending_ticket = 0;
@@ -291,17 +338,19 @@ private:
       sl           = NormalizeDouble(sl,    _Digits);
       tp           = NormalizeDouble(tp,    _Digits);
 
+      // Sanity: sl must be on the correct side of entry
+      if(is_long  && sl >= price) { Print("IFVG: SL >= entry for LONG, skipping"); return; }
+      if(!is_long && sl <= price) { Print("IFVG: SL <= entry for SHORT, skipping"); return; }
+
       bool placed = false;
       if(is_long)
       {
-         // BuyLimit requires entry < current Ask
          double ask = SymbolInfoDouble(m_symbol, SYMBOL_ASK);
          if(price < ask)
             placed = m_trade.BuyLimit(m_settings.lot_size, price, m_symbol, sl, tp);
       }
       else
       {
-         // SellLimit requires entry > current Bid
          double bid = SymbolInfoDouble(m_symbol, SYMBOL_BID);
          if(price > bid)
             placed = m_trade.SellLimit(m_settings.lot_size, price, m_symbol, sl, tp);
