@@ -54,9 +54,9 @@ private:
    int          m_atr_handle;
 
    // Active setup tracking
-   datetime     m_setup_fill;
-   bool         m_setup_long;
+   datetime     m_active_fill;      // fill_time of zone we currently have order/position for
    ulong        m_pending_ticket;
+   datetime     m_traded_fills[];   // permanent record of every fill_time we've placed an order for
 
 public:
    CIFVGModule(IFVGSettings &s)
@@ -64,9 +64,9 @@ public:
       m_settings       = s;
       m_symbol         = Symbol();
       m_atr_handle     = INVALID_HANDLE;
-      m_setup_fill     = 0;
-      m_setup_long     = false;
+      m_active_fill    = 0;
       m_pending_ticket = 0;
+      ArrayResize(m_traded_fills, 0);
    }
 
    bool Init()
@@ -299,16 +299,25 @@ private:
       bool is_long; double entry, sl, tp;
       ComputeLevels(z, hi, lo, bars, is_long, entry, sl, tp);
 
-      bool setup_changed = (z.fill_time != m_setup_fill || is_long != m_setup_long);
-      if(!setup_changed) return;
+      datetime fill = z.fill_time;
 
+      // This zone was already traded — never re-enter it
+      if(HasBeenTraded(fill)) return;
+
+      // Pending order already exists for this exact zone — nothing to do
+      if(fill == m_active_fill) return;
+
+      // New zone: cancel any pending order from the previous zone
       CancelPending();
 
-      if(!HasOpenPosition())
-         PlaceLimitOrder(is_long, entry, sl, tp);
+      // Wait until any open position clears before entering a new zone
+      if(HasOpenPosition()) return;
 
-      m_setup_fill = z.fill_time;
-      m_setup_long = is_long;
+      if(PlaceLimitOrder(is_long, entry, sl, tp))
+      {
+         MarkAsTraded(fill);
+         m_active_fill = fill;
+      }
    }
 
    bool HasOpenPosition()
@@ -332,15 +341,15 @@ private:
       m_pending_ticket = 0;
    }
 
-   void PlaceLimitOrder(bool is_long, double entry, double sl, double tp)
+   bool PlaceLimitOrder(bool is_long, double entry, double sl, double tp)
    {
       double price = NormalizeDouble(entry, _Digits);
       sl           = NormalizeDouble(sl,    _Digits);
       tp           = NormalizeDouble(tp,    _Digits);
 
       // Sanity: sl must be on the correct side of entry
-      if(is_long  && sl >= price) { Print("IFVG: SL >= entry for LONG, skipping"); return; }
-      if(!is_long && sl <= price) { Print("IFVG: SL <= entry for SHORT, skipping"); return; }
+      if(is_long  && sl >= price) { Print("IFVG: SL >= entry for LONG, skipping"); return false; }
+      if(!is_long && sl <= price) { Print("IFVG: SL <= entry for SHORT, skipping"); return false; }
 
       bool placed = false;
       if(is_long)
@@ -361,6 +370,23 @@ private:
       else
          PrintFormat("IFVG | PlaceLimitOrder skipped – entry=%.5f not valid for %s",
                      price, is_long ? "BuyLimit" : "SellLimit");
+
+      return placed;
+   }
+
+   bool HasBeenTraded(datetime fill)
+   {
+      int n = ArraySize(m_traded_fills);
+      for(int i = 0; i < n; i++)
+         if(m_traded_fills[i] == fill) return true;
+      return false;
+   }
+
+   void MarkAsTraded(datetime fill)
+   {
+      int n = ArraySize(m_traded_fills);
+      ArrayResize(m_traded_fills, n + 1);
+      m_traded_fills[n] = fill;
    }
 
    //--- Helpers -------------------------------------------------------
