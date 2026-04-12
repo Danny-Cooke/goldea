@@ -6,6 +6,7 @@
 
 #include <Trade/Trade.mqh>
 #include "TrendFilter.mqh"
+#include "Divergence.mqh"
 
 #define IFVG_OBJ_PREFIX "IFVG_"
 
@@ -59,8 +60,9 @@ private:
    ulong                 m_pending_ticket;
    datetime              m_traded_fills[];   // permanent record of every fill_time we've placed an order for
 
-   // Optional trend filter (NULL = disabled)
+   // Optional filters (NULL = disabled)
    CTrendFilterModule   *m_trend;
+   CDivergenceModule    *m_divergence;
 
 public:
    CIFVGModule(IFVGSettings &s)
@@ -71,10 +73,12 @@ public:
       m_active_fill    = 0;
       m_pending_ticket = 0;
       m_trend          = NULL;
+      m_divergence     = NULL;
       ArrayResize(m_traded_fills, 0);
    }
 
-   void SetTrendFilter(CTrendFilterModule *f) { m_trend = f; }
+   void SetTrendFilter(CTrendFilterModule *f)     { m_trend      = f; }
+   void SetDivergenceFilter(CDivergenceModule *f) { m_divergence = f; }
 
    bool Init()
    {
@@ -331,6 +335,21 @@ private:
          if(!is_long && !m_trend.IsShortAllowed())
          {
             PrintFormat("IFVG | SHORT blocked by trend filter (score=%d)", m_trend.GetScore());
+            return;
+         }
+      }
+
+      // Divergence filter: require divergence supporting the trade direction
+      if(m_divergence != NULL)
+      {
+         if( is_long && !m_divergence.IsBullishSupported())
+         {
+            PrintFormat("IFVG | LONG blocked by divergence filter");
+            return;
+         }
+         if(!is_long && !m_divergence.IsBearishSupported())
+         {
+            PrintFormat("IFVG | SHORT blocked by divergence filter");
             return;
          }
       }

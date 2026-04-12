@@ -8,6 +8,7 @@
 #include "modules/FVG.mqh"
 #include "modules/ATRStop.mqh"
 #include "modules/TrendFilter.mqh"
+#include "modules/Divergence.mqh"
 #include "modules/IFVG.mqh"
 
 input group  "═══  FAIR VALUE GAP  ═══"
@@ -42,6 +43,21 @@ input ENUM_TIMEFRAMES   TF_Timeframe3   = PERIOD_H4;      // Trend Filter - Time
 input int               TF_EMA_Period   = 50;             // Trend Filter - EMA Period
 input int               TF_MinScore     = 2;              // Trend Filter - Min Score to Trade (1-3)
 
+input group  "═══  DIVERGENCE FILTER  ═══"
+input bool              DIV_Enable        = true;             // Divergence - Enable Module
+input bool              DIV_UseRSI        = true;             // Divergence - Use RSI
+input bool              DIV_UseMACD       = true;             // Divergence - Use MACD
+input ENUM_TIMEFRAMES   DIV_Timeframe1    = PERIOD_M15;       // Divergence - Timeframe 1
+input ENUM_TIMEFRAMES   DIV_Timeframe2    = PERIOD_H4;        // Divergence - Timeframe 2
+input int               DIV_RSI_Period    = 14;               // Divergence - RSI Period
+input int               DIV_MACD_Fast     = 12;               // Divergence - MACD Fast Period
+input int               DIV_MACD_Slow     = 26;               // Divergence - MACD Slow Period
+input int               DIV_MACD_Signal   = 9;                // Divergence - MACD Signal Period
+input int               DIV_PivotLeft     = 5;                // Divergence - Pivot Left Bars (older)
+input int               DIV_PivotRight    = 3;                // Divergence - Pivot Right Bars (newer)
+input int               DIV_MaxBars       = 100;              // Divergence - Max Bars to Scan
+input ENUM_DIV_CONFIRM  DIV_ConfirmMode   = DIV_ANY_ENABLED;  // Divergence - Confirm Mode
+
 input group  "═══  ATR STOP LOSS  ═══"
 input bool   ATR_Enable                  = true;      // ATR - Enable Module
 input int    ATR_Period                  = 14;        // ATR - Period
@@ -53,6 +69,7 @@ input color  ATR_ShortColour             = clrOrange; // ATR - Short Stop Colour
 CFVGModule          *g_fvg    = NULL;
 CATRStopModule      *g_atr    = NULL;
 CTrendFilterModule  *g_trend  = NULL;
+CDivergenceModule   *g_div    = NULL;
 CIFVGModule         *g_ifvg   = NULL;
 
 int OnInit()
@@ -92,6 +109,25 @@ int OnInit()
       if(!g_trend.Init()) { delete g_trend; g_trend = NULL; }
    }
 
+   if(DIV_Enable)
+   {
+      DivergenceSettings ds;
+      ds.use_rsi      = DIV_UseRSI;
+      ds.use_macd     = DIV_UseMACD;
+      ds.tf1          = DIV_Timeframe1;
+      ds.tf2          = DIV_Timeframe2;
+      ds.rsi_period   = DIV_RSI_Period;
+      ds.macd_fast    = DIV_MACD_Fast;
+      ds.macd_slow    = DIV_MACD_Slow;
+      ds.macd_signal  = DIV_MACD_Signal;
+      ds.pivot_left   = DIV_PivotLeft;
+      ds.pivot_right  = DIV_PivotRight;
+      ds.max_bars     = DIV_MaxBars;
+      ds.confirm_mode = DIV_ConfirmMode;
+      g_div = new CDivergenceModule(ds);
+      if(!g_div.Init()) { delete g_div; g_div = NULL; }
+   }
+
    if(IFVG_Enable)
    {
       IFVGSettings is;
@@ -110,8 +146,8 @@ int OnInit()
       is.atr_period      = IFVG_ATR_Period;
       is.atr_multiplier  = IFVG_ATR_Multiplier;
       g_ifvg = new CIFVGModule(is);
-      if(g_trend != NULL)
-         g_ifvg.SetTrendFilter(g_trend);
+      if(g_trend != NULL) g_ifvg.SetTrendFilter(g_trend);
+      if(g_div   != NULL) g_ifvg.SetDivergenceFilter(g_div);
       g_ifvg.Init();
    }
 
@@ -122,8 +158,9 @@ void OnDeinit(const int reason)
 {
    if(g_fvg   != NULL) { g_fvg.Deinit();   delete g_fvg;   g_fvg   = NULL; }
    if(g_atr   != NULL) { g_atr.Deinit();   delete g_atr;   g_atr   = NULL; }
-   if(g_trend != NULL) { g_trend.Deinit(); delete g_trend; g_trend = NULL; }
    if(g_ifvg  != NULL) { g_ifvg.Deinit();  delete g_ifvg;  g_ifvg  = NULL; }
+   if(g_trend != NULL) { g_trend.Deinit(); delete g_trend; g_trend = NULL; }
+   if(g_div   != NULL) { g_div.Deinit();   delete g_div;   g_div   = NULL; }
 }
 
 void OnTick()
@@ -131,5 +168,6 @@ void OnTick()
    if(g_fvg   != NULL) g_fvg.Update();
    if(g_atr   != NULL) g_atr.Update();
    if(g_trend != NULL) g_trend.Update();
+   if(g_div   != NULL) g_div.Update();
    if(g_ifvg  != NULL) g_ifvg.Update();
 }
