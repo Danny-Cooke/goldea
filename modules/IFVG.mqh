@@ -5,6 +5,7 @@
 #define IFVG_MQH
 
 #include <Trade/Trade.mqh>
+#include "TrendFilter.mqh"
 
 #define IFVG_OBJ_PREFIX "IFVG_"
 
@@ -54,9 +55,12 @@ private:
    int          m_atr_handle;
 
    // Active setup tracking
-   datetime     m_active_fill;      // fill_time of zone we currently have order/position for
-   ulong        m_pending_ticket;
-   datetime     m_traded_fills[];   // permanent record of every fill_time we've placed an order for
+   datetime              m_active_fill;      // fill_time of zone we currently have order/position for
+   ulong                 m_pending_ticket;
+   datetime              m_traded_fills[];   // permanent record of every fill_time we've placed an order for
+
+   // Optional trend filter (NULL = disabled)
+   CTrendFilterModule   *m_trend;
 
 public:
    CIFVGModule(IFVGSettings &s)
@@ -66,8 +70,11 @@ public:
       m_atr_handle     = INVALID_HANDLE;
       m_active_fill    = 0;
       m_pending_ticket = 0;
+      m_trend          = NULL;
       ArrayResize(m_traded_fills, 0);
    }
+
+   void SetTrendFilter(CTrendFilterModule *f) { m_trend = f; }
 
    bool Init()
    {
@@ -312,6 +319,21 @@ private:
 
       // Wait until any open position clears before entering a new zone
       if(HasOpenPosition()) return;
+
+      // Trend filter: only trade in the direction the higher TFs agree on
+      if(m_trend != NULL)
+      {
+         if( is_long && !m_trend.IsLongAllowed())
+         {
+            PrintFormat("IFVG | LONG blocked by trend filter (score=%d)", m_trend.GetScore());
+            return;
+         }
+         if(!is_long && !m_trend.IsShortAllowed())
+         {
+            PrintFormat("IFVG | SHORT blocked by trend filter (score=%d)", m_trend.GetScore());
+            return;
+         }
+      }
 
       if(PlaceLimitOrder(is_long, entry, sl, tp))
       {
